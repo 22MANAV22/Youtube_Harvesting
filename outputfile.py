@@ -5,6 +5,9 @@ import pandas as pd
 import googleapiclient.discovery
 from googleapiclient.errors import HttpError
 import re
+from sqlalchemy import create_engine
+import psycopg2
+
 
 # Define API version and service name
 api_service_name = "youtube"
@@ -16,15 +19,15 @@ youtube = googleapiclient.discovery.build(api_service_name, api_version, develop
 
 # Function to fetch the data from MYSQL Database
 def fetch_data(query):
-    mydb = mysql.connector.connect(
+    conn = psycopg2.connect(
         host=st.secrets["db_host"],
         user=st.secrets["db_user"],
         password=st.secrets["db_password"],
-        database=st.secrets["db_name"]
+        dbname=st.secrets["db_name"],
+        sslmode='require'  # required by Neon
     )
-
-    df = pd.read_sql(query, mydb)
-    mydb.close()
+    df = pd.read_sql(query, conn)
+    conn.close()
     return df
 
 
@@ -95,16 +98,20 @@ def execute_query(question):
 # Function to fetch the channel details using API key
 def fetch_channel_data(newchannel_id):
     try:
-        mydb = mysql.connector.connect(host="localhost", user="root", password="Yourmysql_password",
-                                       database="youtube_data")
-        cursor = mydb.cursor()
+        conn = psycopg2.connect(
+            host=st.secrets["db_host"],
+            user=st.secrets["db_user"],
+            password=st.secrets["db_password"],
+            dbname=st.secrets["db_name"],
+            sslmode='require'
+        )
+        cursor = conn.cursor()
         cursor.execute("SELECT * FROM channels WHERE channel_id = %s", (newchannel_id,))
         existing_channel = cursor.fetchone()
 
-        # Checking the given Channel ID already exist in database and give error message if exists
         if existing_channel:
             cursor.close()
-            mydb.close()
+            conn.close()
             st.error("Channel ID already exists in the database.")
             return pd.DataFrame()
 
@@ -113,8 +120,8 @@ def fetch_channel_data(newchannel_id):
             id=newchannel_id
         )
         response = request.execute()
+
         if 'items' in response and len(response["items"]) > 0:
-            # Analysing the response and extracting the required data
             data = {
                 "channel_name": response["items"][0]["snippet"]["title"],
                 "channel_id": newchannel_id,
@@ -124,19 +131,22 @@ def fetch_channel_data(newchannel_id):
                 "channel_subcount": response["items"][0]["statistics"]["subscriberCount"]
             }
 
-            # Inserting the fetched data into MSQL database
-            cursor.execute("""INSERT INTO channels (channel_name, channel_id, channel_des, channel_playid, channel_viewcount, channel_subcount)
+            cursor.execute("""
+                INSERT INTO channels (channel_name, channel_id, channel_des, channel_playid, channel_viewcount, channel_subcount)
                 VALUES (%s, %s, %s, %s, %s, %s)
-            """, (data['channel_name'], data['channel_id'], data['channel_des'], data['channel_playid'],
-                  data['channel_viewcount'], data['channel_subcount']))
-            mydb.commit()
+            """, (
+                data['channel_name'], data['channel_id'], data['channel_des'],
+                data['channel_playid'], data['channel_viewcount'], data['channel_subcount']
+            ))
+
+            conn.commit()
             cursor.close()
-            mydb.close()
+            conn.close()
 
             return pd.DataFrame(data, index=[0])
         else:
             cursor.close()
-            mydb.close()
+            conn.close()
             st.error("No items found in the response.")
             return pd.DataFrame()
 
@@ -144,7 +154,7 @@ def fetch_channel_data(newchannel_id):
         st.error(f"HTTP Error: {e}")
         return pd.DataFrame()
     except KeyError as e:
-        st.error(f"KeyError: {e}. Please make sure the channel ID is correct.")
+        st.error(f"KeyError: {e}")
         return pd.DataFrame()
 
 
@@ -187,7 +197,6 @@ def fetch_video_data(all_video_ids):
         request = youtube.videos().list(
             part='snippet,contentDetails,statistics',
             id=each
-
         )
         response = request.execute()
         for i in response["items"]:
@@ -206,39 +215,44 @@ def fetch_video_data(all_video_ids):
                 "Video_thumbnails": i["snippet"]["thumbnails"]['default']['url'],
                 "Video_caption": i["contentDetails"]["caption"]
             }
-
             video_info.append(given)
 
-    # Inserting the fetched data into MSQL database
-    mydb = mysql.connector.connect(host="localhost", user="root", password="Yourmysql_password",
-                                   database="youtube_data")
-    cursor = mydb.cursor()
+    conn = psycopg2.connect(
+        host=st.secrets["db_host"],
+        user=st.secrets["db_user"],
+        password=st.secrets["db_password"],
+        dbname=st.secrets["db_name"],
+        sslmode='require'
+    )
+    cursor = conn.cursor()
     for all in video_info:
-        cursor.execute("""INSERT INTO videos (Video_Id, Video_title, Video_Description,channel_id,video_Tags, Video_pubdate,Video_viewcount, 
-            Video_likecount, Video_favoritecount, Video_commentcount, Video_duration,Video_thumbnails, Video_caption)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                       (all['Video_Id'], all['Video_title'], all['Video_Description'], all['channel_id'],
-                        all['video_Tags'],
-                        all['Video_pubdate'], all['Video_viewcount'], all['Video_likecount'],
-                        all['Video_favoritecount'], all['Video_commentcount'],
-                        all['Video_duration'], all['Video_thumbnails'], all["Video_caption"]))
-    mydb.commit()
-    mydb.close()
+        cursor.execute("""
+            INSERT INTO videos (Video_Id, Video_title, Video_Description, channel_id, video_Tags, Video_pubdate,
+                Video_viewcount, Video_likecount, Video_favoritecount, Video_commentcount, Video_duration,
+                Video_thumbnails, Video_caption)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            all['Video_Id'], all['Video_title'], all['Video_Description'], all['channel_id'],
+            all['video_Tags'], all['Video_pubdate'], all['Video_viewcount'],
+            all['Video_likecount'], all['Video_favoritecount'], all['Video_commentcount'],
+            all['Video_duration'], all['Video_thumbnails'], all["Video_caption"]
+        ))
+    conn.commit()
+    conn.close()
 
     return pd.DataFrame(video_info)
-
 
 # Function to fetch the comments from video IDs
 def Fetch_comment_data(newchannel_id):
     commentdata = []
     allvideo_ids = playlist_videos_id([newchannel_id])
     for video in allvideo_ids:
-
         try:
             request = youtube.commentThreads().list(
                 part="snippet",
                 videoId=video,
-                maxResults=50)
+                maxResults=50
+            )
             response = request.execute()
             for all in response["items"]:
                 given = {
@@ -247,24 +261,31 @@ def Fetch_comment_data(newchannel_id):
                     "Comment_Authorname": all["snippet"]["topLevelComment"]["snippet"]["authorDisplayName"],
                     "published_date": all["snippet"]["topLevelComment"]["snippet"]["publishedAt"],
                     "video_id": all["snippet"]["topLevelComment"]["snippet"]["videoId"],
-                    'channel_id': all['snippet']['channelId']}
-
+                    'channel_id': all['snippet']['channelId']
+                }
                 commentdata.append(given)
-            nextpagetoken = response.get('nextPageToken')
-        except HttpError as e:
+        except HttpError:
             pass
 
-    # Inserting the fetched data into MSQL database
-    mydb = mysql.connector.connect(host="localhost", user="root", password="Yourmysql_password",
-                                   database="youtube_data")
-    cursor = mydb.cursor()
+    conn = psycopg2.connect(
+        host=st.secrets["db_host"],
+        user=st.secrets["db_user"],
+        password=st.secrets["db_password"],
+        dbname=st.secrets["db_name"],
+        sslmode='require'
+    )
+    cursor = conn.cursor()
     for comment in commentdata:
-        cursor.execute("""INSERT INTO comments (comment_id,Comment_Text, Comment_Authorname,published_date,video_id,channel_id)
+        cursor.execute("""
+            INSERT INTO comments (comment_id, Comment_Text, Comment_Authorname, published_date, video_id, channel_id)
             VALUES (%s, %s, %s, %s, %s, %s)
-        """, (comment['comment_id'], comment['Comment_Text'], comment['Comment_Authorname'], comment['published_date'],
-              comment['video_id'], comment['channel_id']))
-    mydb.commit()
-    mydb.close()
+        """, (
+            comment['comment_id'], comment['Comment_Text'], comment['Comment_Authorname'],
+            comment['published_date'], comment['video_id'], comment['channel_id']
+        ))
+    conn.commit()
+    conn.close()
+
     return pd.DataFrame(commentdata)
 
 
