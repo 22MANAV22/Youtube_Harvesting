@@ -188,31 +188,54 @@ def playlist_videos_id(channel_ids):
 
 # Function to fetch the video datas from the video_IDs
 def fetch_video_data(all_video_ids):
-    video_info = []
-    for each in all_video_ids:
-        request = youtube.videos().list(
-            part='snippet,contentDetails,statistics',
-            id=each
-        )
-        response = request.execute()
-        for i in response["items"]:
-            given = {
-                "Video_Id": i["id"],
-                "Video_title": i["snippet"]["title"],
-                "Video_Description": i["snippet"]["description"],
-                "channel_id": i['snippet']['channelId'],
-                "video_Tags": i['snippet'].get("Tags", 0),
-                "Video_pubdate": i["snippet"]["publishedAt"],
-                "Video_viewcount": i["statistics"]["viewCount"],
-                "Video_likecount": i["statistics"].get('likeCount', 0),
-                "Video_favoritecount": i["statistics"]["favoriteCount"],
-                "Video_commentcount": i["statistics"].get("Comment_Count", 0),
-                "Video_duration": iso8601_duration_to_seconds(i["contentDetails"]["duration"]),
-                "Video_thumbnails": i["snippet"]["thumbnails"]['default']['url'],
-                "Video_caption": i["contentDetails"]["caption"]
-            }
-            video_info.append(given)
+    import time
+    import requests
+    import pandas as pd
+    from googleapiclient.discovery import build
+    import psycopg2
+    import streamlit as st
 
+    # YouTube API client
+    youtube = build('youtube', 'v3', developerKey=st.secrets["youtube_api_key"])
+    video_info = []
+
+    # Process in batches of 50 (YouTube API max batch size)
+    for i in range(0, len(all_video_ids), 50):
+        batch_ids = all_video_ids[i:i + 50]
+        request = youtube.videos().list(
+            part='snippet,statistics',  # Removed 'contentDetails' to save quota
+            id=','.join(batch_ids)
+        )
+        try:
+            response = request.execute()
+        except Exception as e:
+            print(f"Error in batch {i//50+1}: {e}")
+            continue
+
+        for item in response.get("items", []):
+            try:
+                given = {
+                    "Video_Id": item["id"],
+                    "Video_title": item["snippet"]["title"],
+                    "Video_Description": item["snippet"]["description"],
+                    "channel_id": item['snippet']['channelId'],
+                    "video_Tags": item["snippet"].get("tags", []),
+                    "Video_pubdate": item["snippet"]["publishedAt"],
+                    "Video_viewcount": item["statistics"].get("viewCount", 0),
+                    "Video_likecount": item["statistics"].get('likeCount', 0),
+                    "Video_favoritecount": item["statistics"].get("favoriteCount", 0),
+                    "Video_commentcount": item["statistics"].get("commentCount", 0),
+                    "Video_duration": 0,  # Skipped for now (requires contentDetails, costly)
+                    "Video_thumbnails": item["snippet"]["thumbnails"]['default']['url'],
+                    "Video_caption": "n/a"  # Skipped for now (requires contentDetails)
+                }
+                video_info.append(given)
+            except KeyError as e:
+                print(f"Missing field: {e}")
+
+        time.sleep(0.2)  # To avoid hitting quota caps
+
+    # Insert into PostgreSQL
     conn = psycopg2.connect(
         host=st.secrets["db_host"],
         user=st.secrets["db_user"],
@@ -221,22 +244,28 @@ def fetch_video_data(all_video_ids):
         sslmode='require'
     )
     cursor = conn.cursor()
-    for all in video_info:
+
+    for vid in video_info:
         cursor.execute("""
-            INSERT INTO videos (Video_Id, Video_title, Video_Description, channel_id, video_Tags, Video_pubdate,
-                Video_viewcount, Video_likecount, Video_favoritecount, Video_commentcount, Video_duration,
+            INSERT INTO videos (
+                Video_Id, Video_title, Video_Description, channel_id,
+                video_Tags, Video_pubdate, Video_viewcount, Video_likecount,
+                Video_favoritecount, Video_commentcount, Video_duration,
                 Video_thumbnails, Video_caption)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (Video_Id) DO NOTHING;
         """, (
-            all['Video_Id'], all['Video_title'], all['Video_Description'], all['channel_id'],
-            all['video_Tags'], all['Video_pubdate'], all['Video_viewcount'],
-            all['Video_likecount'], all['Video_favoritecount'], all['Video_commentcount'],
-            all['Video_duration'], all['Video_thumbnails'], all["Video_caption"]
+            vid['Video_Id'], vid['Video_title'], vid['Video_Description'], vid['channel_id'],
+            vid['video_Tags'], vid['Video_pubdate'], vid['Video_viewcount'],
+            vid['Video_likecount'], vid['Video_favoritecount'], vid['Video_commentcount'],
+            vid['Video_duration'], vid['Video_thumbnails'], vid['Video_caption']
         ))
+
     conn.commit()
     conn.close()
 
     return pd.DataFrame(video_info)
+
 
 # Function to fetch the comments from video IDs
 def Fetch_comment_data(newchannel_id):
