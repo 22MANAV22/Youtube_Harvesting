@@ -196,7 +196,7 @@ def fetch_video_data(all_video_ids):
     import streamlit as st
 
     # YouTube API client
-    youtube = build('youtube', 'v3', developerKey=st.secrets["youtube_api_key"])
+    youtube = build('youtube', 'v3', developerKey=st.secrets["api_key"])
     video_info = []
 
     # Process in batches of 50 (YouTube API max batch size)
