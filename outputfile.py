@@ -308,7 +308,7 @@ def main():
 
     if Options == "Channels":
         st.header("Channels")
-        channels_df = fetch_data("SELECT * FROM Channels;")
+        channels_df = fetch_data("SELECT * FROM channels;")
         channels_df.index += 1
         st.dataframe(channels_df)
 
