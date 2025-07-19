@@ -5,7 +5,6 @@ import pandas as pd
 import googleapiclient.discovery
 from googleapiclient.errors import HttpError
 import re
-from sqlalchemy import create_engine
 import psycopg2
 
 
@@ -18,16 +17,13 @@ youtube = googleapiclient.discovery.build(api_service_name, api_version, develop
 
 
 # Function to fetch the data from MYSQL Database
+from sqlalchemy import create_engine
+
 def fetch_data(query):
-    conn = psycopg2.connect(
-        host=st.secrets["db_host"],
-        user=st.secrets["db_user"],
-        password=st.secrets["db_password"],
-        dbname=st.secrets["db_name"],
-        sslmode='require'  # required by Neon
+    engine = create_engine(
+        f"postgresql+psycopg2://{st.secrets['db_user']}:{st.secrets['db_password']}@{st.secrets['db_host']}/{st.secrets['db_name']}?sslmode=require"
     )
-    df = pd.read_sql(query, conn)
-    conn.close()
+    df = pd.read_sql(query, engine)
     return df
 
 
